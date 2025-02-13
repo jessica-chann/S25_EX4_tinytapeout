@@ -1,5 +1,3 @@
-`default_nettype none
-
 module my_chip (
     input logic [11:0] io_in, // Inputs to your chip
     output logic [11:0] io_out, // Outputs from your chip
@@ -11,38 +9,102 @@ module my_chip (
     // TODO: remove the counter design and use this module to insert your own design
     // DO NOT change the I/O header of this design
 
-    wire [6:0] led_out;
+    logic [11:0] data_in, range;
+    logic        go, finish, debug_error;
+    logic [6:0]  led_out;
+    logic [11:0] max, min;
+
+    enum logic [1:0] {IDLE, GO, ERROR, FIN} state, nextState;
+
+    assign data_in = io_in;
     assign io_out[6:0] = led_out;
 
-    // external clock is 1000Hz, so need 10 bit counter
-    reg [9:0] second_counter;
-    reg [3:0] digit;
-
-    always @(posedge clock) begin
-        // if reset, set counter to 0
+    always_ff @(posedge clock) begin
         if (reset) begin
-            second_counter <= 0;
-            digit <= 0;
+            state <= IDLE;
+            max <= 0;
+            min <= 16'hFFFF;
         end else begin
-            // if up to 16e6
-            if (second_counter == 1000) begin
-                // reset
-                second_counter <= 0;
+            state <= nextState;
 
-                // increment digit
-                digit <= digit + 1'b1;
+            if (!finish && go) begin
+                if (data_in > max) max <= data_in;
+                else max <= max;
+                if (data_in < min) min <= data_in;
+                else min <= min;
+            end
 
-                // only count from 0 to 9
-                if (digit == 9)
-                    digit <= 0;
-
-            end else
-                // increment counter
-                second_counter <= second_counter + 1'b1;
         end
     end
 
+    // next state logic
+    always_comb begin
+        case (state)
+            IDLE: begin
+                if (finish && go) begin
+                    nextState = ERROR;
+                    debug_error = 1;
+                end else if (finish) begin
+                    nextState = ERROR;
+                    debug_error = 1;
+                end else if (!finish && go) begin
+                    nextState = GO;
+                    debug_error = 0;
+                end else begin
+                    nextState = IDLE;
+                    debug_error = 0;
+                end
+
+                range = 0;
+            end
+            GO: begin
+                if (finish && go) begin
+                    nextState = ERROR;
+                    debug_error = 1;
+                end else if (finish) begin
+                    nextState = FIN;
+                    debug_error = 0;
+                end else begin
+                    nextState = GO;
+                    debug_error = 0;
+                end
+
+                range = 0;
+            end
+            FIN: begin
+                if (finish && go) begin
+                    nextState = ERROR;
+                    debug_error = 1;
+                end else if (go) begin
+                    nextState = GO;
+                    debug_error = 0;
+                end else begin
+                    nextState = FIN;
+                    debug_error = 0;
+                end
+
+                if ((data_in > max) && (data_in < min)) range = 0;
+                else if (data_in > max) range = (data_in - min);
+                else if (data_in < min) range = (max - data_in);
+                else range = (max - min);
+
+            end
+            ERROR: begin
+                debug_error = 1;
+                if (go && !finish) begin
+                    nextState = GO;
+                    debug_error = 0;
+                end else begin
+                    nextState = ERROR;
+                    debug_error = 0;
+                end
+
+                range = 0;
+            end
+        endcase
+    end
+
     // instantiate segment display
-    seg7 seg7(.counter(digit), .segments(led_out));
+    seg7 seg7(.counter(range[3:0]), .segments(led_out));
 
 endmodule
